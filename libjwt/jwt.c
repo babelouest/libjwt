@@ -660,12 +660,10 @@ static int jwt_verify_sha_pem(jwt_t *jwt, const gnutls_digest_algorithm_t alg, c
   char * sig_dec;
   gnutls_datum_t cert_dat = {(void *) jwt->key, jwt->key_len}, data, sig;
   
-  printf("grut 0\n");
   base64uri_decode(sig_b64_dup);
   sig_dec = base64_decode(sig_b64_dup, &sig_len);
   sig.data = (void*)sig_dec;
   sig.size = sig_len;
-  printf("grut 1 %s\n", head);
   free(sig_b64_dup);
   
   if (head != NULL) {
@@ -756,11 +754,11 @@ static int jwt_verify(jwt_t *jwt, const char *head, const char *sig)
 		return jwt_verify_sha_hmac(jwt, GNUTLS_DIG_SHA512, head, sig);
 
 	case JWT_ALG_RS256:
-		return jwt_verify_sha_pem(jwt, GNUTLS_DIG_SHA256, head, sig);
+		return jwt_verify_sha_pem(jwt, GNUTLS_SIGN_RSA_SHA256, head, sig);
 	case JWT_ALG_RS384:
-		return jwt_verify_sha_pem(jwt, GNUTLS_DIG_SHA384, head, sig);
+		return jwt_verify_sha_pem(jwt, GNUTLS_SIGN_RSA_SHA384, head, sig);
 	case JWT_ALG_RS512:
-		return jwt_verify_sha_pem(jwt, GNUTLS_DIG_SHA512, head, sig);
+		return jwt_verify_sha_pem(jwt, GNUTLS_SIGN_RSA_SHA512, head, sig);
 
 	/*case JWT_ALG_ES256:
 		return jwt_verify_sha_pem(jwt, EVP_sha256(), EVP_PKEY_EC,
