@@ -26,6 +26,8 @@
 #include <openssl/pem.h>*/
 #include <gnutls/gnutls.h>
 #include <gnutls/crypto.h>
+#include <gnutls/x509.h>
+#include <gnutls/abstract.h>
 
 #include <jansson.h>
 
@@ -35,11 +37,11 @@
 #include "config.h"
 #endif
 
-static const unsigned char base64_table[65] =
+static const char base64_table[65] =
 	"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 /**
- * base64_encode - Base64 encode
+ * o_base64_encode - Base64 encode
  * @src: Data to be encoded
  * @len: Length of the data to be encoded
  * @out: Pointer to output variable
@@ -98,100 +100,80 @@ int base64_encode(const char * src, size_t len, char * out, size_t * out_len) {
 	return 1;
 }
 
-/**
- * base64_decode - Base64 decode
- * @src: Data to be decoded
- * @len: Length of the data to be decoded
- * @out: Pointer to output variable
- * @out_len: Pointer to output length variable
- * Returns: 1 on success, 0 on failure
- *
- * The nul terminator is not included in out_len.
- */
-int base64_decode(const char *src, size_t len, char * out, size_t * out_len) {
-	char dtable[256], *pos = out, block[4], tmp;
-	size_t i, count;
-	int pad = 0;
+static const char base64_chars[] =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-	memset(dtable, 0x80, 256);
-	for (i = 0; i < sizeof(base64_table) - 1; i++) {
-		dtable[base64_table[i]] = (char) i;
+static const char base64_digits[] =
+  { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 62, 0, 0, 0, 63, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61,
+    0, 0, 0, -1, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+    14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 0, 0, 0, 0, 0, 0, 26,
+    27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44,
+    45, 46, 47, 48, 49, 50, 51, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+
+
+char * base64_decode(const char* src, size_t * len)
+{
+  size_t in_len = strlen (src), out_len;
+  char* dest;
+  char* result;
+
+  if (in_len % 4)
+    {
+      /* Wrong base64 string length */
+      return NULL;
+    }
+  out_len = (in_len / 4 * 3 + 1);
+  if (len != NULL) {
+    *len = out_len;
   }
-	dtable['='] = 0;
-
-	count = 0;
-	for (i = 0; i < len; i++) {
-		if (dtable[src[i]] != 0x80) {
-			count++;
-    }
-	}
-
-	if (count == 0 || count % 4 || src == NULL || out == NULL) {
-		return 0;
+  result = dest = malloc(out_len);
+  if (result == NULL)
+    return NULL; /* out of memory */
+  while (*src) {
+    char a = base64_digits[(unsigned char)*(src++)];
+    char b = base64_digits[(unsigned char)*(src++)];
+    char c = base64_digits[(unsigned char)*(src++)];
+    char d = base64_digits[(unsigned char)*(src++)];
+    *(dest++) = (a << 2) | ((b & 0x30) >> 4);
+    if (c == (char)-1)
+      break;
+    *(dest++) = ((b & 0x0f) << 4) | ((c & 0x3c) >> 2);
+    if (d == (char)-1)
+      break;
+    *(dest++) = ((c & 0x03) << 6) | d;
   }
+  *dest = 0;
+  return result;
+}
+static void base64uri_encode(char *str)
+{
+	int len = strlen(str);
+	int i, t;
 
-	count = 0;
-	for (i = 0; i < len; i++) {
-		tmp = dtable[src[i]];
-		if (tmp == 0x80) {
-			continue;
-    }
-
-		if (src[i] == '=') {
-			pad++;
-    }
-		block[count] = tmp;
-		count++;
-		if (count == 4) {
-			*pos++ = (block[0] << 2) | (block[1] >> 4);
-			*pos++ = (block[1] << 4) | (block[2] >> 2);
-			*pos++ = (block[2] << 6) | block[3];
-			count = 0;
-			if (pad) {
-				if (pad == 1) {
-					pos--;
-        } else if (pad == 2) {
-					pos -= 2;
-        } else {
-					/* Invalid padding */
-					return 0;
-				}
-				break;
-			}
+	for (i = t = 0; i < len; i++) {
+		switch (str[i]) {
+		case '+':
+			str[t++] = '-';
+			break;
+		case '/':
+			str[t++] = '_';
+			break;
+		case '=':
+			break;
+		default:
+			str[t++] = str[i];
 		}
 	}
 
-	*out_len = pos - out;
-	return 1;
+	str[t] = '\0';
 }
-
-/* functions to make libjwt backward compatible with OpenSSL version < 1.1.0
- * See https://wiki.openssl.org/index.php/1.1_API_Changes
- 
-#if OPENSSL_VERSION_NUMBER < 0x10100000L
-
-static void ECDSA_SIG_get0(const ECDSA_SIG *sig, const BIGNUM **pr, const BIGNUM **ps)
-{
-	if (pr != NULL)
-		*pr = sig->r;
-	if (ps != NULL)
-		*ps = sig->s;
-}
-
-static int ECDSA_SIG_set0(ECDSA_SIG *sig, BIGNUM *r, BIGNUM *s)
-{
-	if (r == NULL || s == NULL)
-		return 0;
-
-	BN_clear_free(sig->r);
-	BN_clear_free(sig->s);
-	sig->r = r;
-	sig->s = s;
-
-	return 1;
-}
-
-#endif*/
 
 struct jwt {
 	jwt_alg_t alg;
@@ -409,16 +391,15 @@ static long get_js_int(json_t *js, const char *key)
 	return val;
 }
 
-static void *jwt_b64_decode(const char *src, int *ret_len)
+static void *jwt_b64_decode(const char *src, size_t *ret_len)
 {
-	/*BIO *b64, *bmem;
-	void *buf;
-	char *new;
-	int len, i, z;*/
+	char *new, * to_return;
+	int len, i, z;
 
 	/* Decode based on RFC-4648 URI safe encoding. */
-	/*len = strlen(src);
+	len = strlen(src);
 	new = alloca(len + 4);
+  *ret_len = 0;
 	if (!new)
 		return NULL;
 
@@ -439,42 +420,20 @@ static void *jwt_b64_decode(const char *src, int *ret_len)
 		while (z--)
 			new[i++] = '=';
 	}
-	new[i] = '\0';*/
-
-	/* Setup the OpenSSL base64 decoder. */
-	/*b64 = BIO_new(BIO_f_base64());
-	bmem = BIO_new_mem_buf(new, strlen(new));
-	if (!b64 || !bmem)
-		return NULL;
-
-	BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL);
-	BIO_push(b64, bmem);
-
-	len = BIO_pending(b64);
-	if (len <= 0) {
-		BIO_free_all(b64);
-		return NULL;
-	}
-
-	buf = malloc(len + 1);
-	if (!buf) {
-		BIO_free_all(b64);
-		return NULL;
-	}
-
-	*ret_len = BIO_read(b64, buf, len);
-	BIO_free_all(b64);
-
-	return buf;*/
-  return NULL;
+	new[i] = '\0';
+  
+  to_return = base64_decode(new, NULL);
+  if (to_return != NULL) {
+    *ret_len = strlen(to_return);
+  }
+  return to_return;
 }
-
 
 static json_t *jwt_b64_decode_json(char *src)
 {
 	json_t *js;
 	char *buf;
-	int len;
+	size_t len = 0;
 
 	buf = jwt_b64_decode(src, &len);
 
@@ -490,355 +449,320 @@ static json_t *jwt_b64_decode_json(char *src)
 	return js;
 }
 
-static void base64uri_encode(char *str)
-{
-	int len = strlen(str);
-	int i, t;
-
-	for (i = t = 0; i < len; i++) {
-		switch (str[i]) {
-		case '+':
-			str[t++] = '-';
-			break;
-		case '/':
-			str[t++] = '_';
-			break;
-		case '=':
-			break;
-		default:
-			str[t++] = str[i];
-		}
-	}
-
-	str[t] = '\0';
+char * dump_head(jwt_t * jwt, int pretty) {
+  json_t * j_header;
+  char * str_header;
+  
+  if (jwt != NULL) {
+    if (jwt->alg != JWT_ALG_NONE) {
+      j_header = json_pack("{ssss}", "typ", "JWT", "alg", jwt_alg_str(jwt->alg));
+    } else {
+      j_header = json_pack("{ss}", "alg", jwt_alg_str(jwt->alg));
+    }
+    str_header = json_dumps(j_header, (pretty?JSON_INDENT(2):JSON_COMPACT) | JSON_PRESERVE_ORDER);
+    json_decref(j_header);
+    return str_header;
+  } else {
+    return NULL;
+  }
 }
 
-/*static int jwt_sign_sha_hmac(jwt_t *jwt, BIO *out, const EVP_MD *alg,
-			     const char *str)
-{
-	unsigned char res[EVP_MAX_MD_SIZE];
-	unsigned int res_len;
-
-	HMAC(alg, jwt->key, jwt->key_len,
-	     (const unsigned char *)str, strlen(str), res, &res_len);
-
-	BIO_write(out, res, res_len);
-
-	BIO_flush(out);
-
-	return 0;
+char * jwt_generate_signature_ec(jwt_t *jwt, const char * b64_header, const char * b64_payload) {
+  char * b64_sig = NULL;
+  gnutls_x509_privkey_t key;
+  gnutls_privkey_t privkey;
+  char * body_full;
+  size_t body_full_len, b64_len;
+  gnutls_datum_t key_dat = {(void *) jwt->key, jwt->key_len}, body_dat, sig_dat;
+  gnutls_digest_algorithm_t hash = GNUTLS_DIG_NULL;
+  
+  body_full_len = snprintf(NULL, 0, "%s.%s", b64_header, b64_payload);
+  body_full = malloc((body_full_len+1)*sizeof(char));
+  snprintf(body_full, (body_full_len + 1), "%s.%s", b64_header, b64_payload);
+  body_dat.data = (void*)body_full;
+  body_dat.size = strlen(body_full);
+  if (jwt != NULL) {
+    if (jwt->alg == JWT_ALG_RS256) {
+      hash = GNUTLS_DIG_SHA256;
+    } else if (jwt->alg == JWT_ALG_RS384) {
+      hash = GNUTLS_DIG_SHA384;
+    } else if (jwt->alg == JWT_ALG_RS512) {
+      hash = GNUTLS_DIG_SHA512;
+    }
+    if (hash != GNUTLS_DIG_NULL) {
+      gnutls_x509_privkey_init(&key);
+      gnutls_x509_privkey_import(key, &key_dat, GNUTLS_X509_FMT_PEM);
+      gnutls_privkey_init(&privkey);
+      gnutls_privkey_import_x509(privkey, key, 0);
+      gnutls_privkey_sign_data(privkey, hash, 0, &body_dat, &sig_dat);
+      b64_sig = malloc(2*sig_dat.size*sizeof(char));
+      base64_encode((char *)sig_dat.data, sig_dat.size, b64_sig, &b64_len);
+      base64uri_encode(b64_sig);
+      gnutls_x509_privkey_deinit(key);
+      gnutls_privkey_deinit(privkey);
+    }
+  }
+  
+  free(body_full);
+  return b64_sig;
 }
 
-static int jwt_verify_sha_hmac(jwt_t *jwt, const EVP_MD *alg, const char *head,
-			       const char *sig)
-{
-	unsigned char res[EVP_MAX_MD_SIZE];
-	BIO *bmem = NULL, *b64 = NULL;
-	unsigned int res_len;
-	char *buf;
-	int len, ret = EINVAL;
+char * jwt_generate_signature_rsa(jwt_t *jwt, const char * b64_header, const char * b64_payload) {
+  char * b64_sig = NULL;
+  gnutls_x509_privkey_t key;
+  gnutls_privkey_t privkey;
+  char * body_full;
+  size_t body_full_len, b64_len;
+  gnutls_datum_t key_dat = {(void *) jwt->key, jwt->key_len}, body_dat, sig_dat;
+  gnutls_digest_algorithm_t hash = GNUTLS_DIG_NULL;
+  
+  body_full_len = snprintf(NULL, 0, "%s.%s", b64_header, b64_payload);
+  body_full = malloc((body_full_len+1)*sizeof(char));
+  snprintf(body_full, (body_full_len + 1), "%s.%s", b64_header, b64_payload);
+  body_dat.data = (void*)body_full;
+  body_dat.size = strlen(body_full);
+  if (jwt != NULL) {
+    if (jwt->alg == JWT_ALG_RS256) {
+      hash = GNUTLS_DIG_SHA256;
+    } else if (jwt->alg == JWT_ALG_RS384) {
+      hash = GNUTLS_DIG_SHA384;
+    } else if (jwt->alg == JWT_ALG_RS512) {
+      hash = GNUTLS_DIG_SHA512;
+    }
+    if (hash != GNUTLS_DIG_NULL) {
+      gnutls_x509_privkey_init(&key);
+      gnutls_x509_privkey_import(key, &key_dat, GNUTLS_X509_FMT_PEM);
+      gnutls_privkey_init(&privkey);
+      gnutls_privkey_import_x509(privkey, key, 0);
+      gnutls_privkey_sign_data(privkey, hash, 0, &body_dat, &sig_dat);
+      b64_sig = malloc(2*sig_dat.size*sizeof(char));
+      base64_encode((char *)sig_dat.data, sig_dat.size, b64_sig, &b64_len);
+      base64uri_encode(b64_sig);
+      gnutls_x509_privkey_deinit(key);
+      gnutls_privkey_deinit(privkey);
+    }
+  }
+  
+  free(body_full);
+  return b64_sig;
+}
 
-	b64 = BIO_new(BIO_f_base64());
-	if (b64 == NULL)
-		return ENOMEM;
+char * jwt_generate_signature(jwt_t *jwt, const int pretty, const char * encoded_header, const char * encoded_payload) {
+  char * str_header = NULL, * str_payload = NULL, * b64_header = NULL, * b64_payload = NULL, * str_sig = NULL, * b64_sig = NULL, * tmp = NULL;
+  size_t b64_header_len, b64_payload_len, b64_sig_len, tmp_s;
+  
+  if (encoded_header == NULL) {
+    str_header = dump_head(jwt, pretty);
+    b64_header = malloc((2*strlen(str_header)+1) * sizeof(char));
+    base64_encode(str_header, strlen(str_header), b64_header, &b64_header_len);
+    base64uri_encode(b64_header);
+  } else {
+    b64_header = strdup(encoded_header);
+  }
+  
+  if (encoded_payload == NULL) {
+    str_payload = json_dumps(jwt->grants, (pretty?JSON_INDENT(2):JSON_COMPACT) | JSON_SORT_KEYS);
+    b64_payload = malloc((2*strlen(str_payload)+1) * sizeof(char));
+    base64_encode(str_payload, strlen(str_payload), b64_payload, &b64_payload_len);
+    base64uri_encode(b64_payload);
+  } else {
+    b64_payload = strdup(encoded_payload);
+  }
+  
+  if (jwt != NULL) {
+    if (jwt->alg == JWT_ALG_NONE) {
+      b64_sig = strdup("");
+      b64_sig_len = 0;
+    } else if (jwt->alg == JWT_ALG_ES256) {
+      // TODO
+    } else if (jwt->alg == JWT_ALG_ES384) {
+      // TODO
+    } else if (jwt->alg == JWT_ALG_ES512) {
+      b64_sig = jwt_generate_signature_ec(jwt, b64_header, b64_payload);
+    } else if (jwt->alg == JWT_ALG_RS256) {
+      b64_sig = jwt_generate_signature_rsa(jwt, b64_header, b64_payload);
+    } else if (jwt->alg == JWT_ALG_RS384) {
+      b64_sig = jwt_generate_signature_rsa(jwt, b64_header, b64_payload);
+    } else if (jwt->alg == JWT_ALG_RS512) {
+      b64_sig = jwt_generate_signature_rsa(jwt, b64_header, b64_payload);
+    } else if (jwt->alg == JWT_ALG_HS256) {
+      tmp_s = snprintf(NULL, 0, "%s.%s", b64_header, b64_payload);
+      tmp = malloc((tmp_s+1)*sizeof(char));
+      snprintf(tmp, (tmp_s+1), "%s.%s", b64_header, b64_payload);
+      str_sig = malloc(gnutls_hmac_get_len(GNUTLS_DIG_SHA256)*sizeof(char));
+      gnutls_hmac_fast(GNUTLS_DIG_SHA256, jwt->key, jwt->key_len, tmp, strlen(tmp), str_sig);
+      b64_sig = malloc(2*gnutls_hmac_get_len(GNUTLS_DIG_SHA256)*sizeof(char));
+      base64_encode(str_sig, gnutls_hmac_get_len(GNUTLS_DIG_SHA256), b64_sig, &b64_sig_len);
+      base64uri_encode(b64_sig);
+    } else if (jwt->alg == JWT_ALG_HS384) {
+      tmp_s = snprintf(NULL, 0, "%s.%s", b64_header, b64_payload);
+      tmp = malloc((tmp_s+1)*sizeof(char));
+      snprintf(tmp, (tmp_s+1), "%s.%s", b64_header, b64_payload);
+      str_sig = malloc(gnutls_hmac_get_len(GNUTLS_DIG_SHA384)*sizeof(char));
+      gnutls_hmac_fast(GNUTLS_DIG_SHA384, jwt->key, jwt->key_len, tmp, strlen(tmp), str_sig);
+      b64_sig = malloc(2*gnutls_hmac_get_len(GNUTLS_DIG_SHA384)*sizeof(char));
+      base64_encode(str_sig, gnutls_hmac_get_len(GNUTLS_DIG_SHA384), b64_sig, &b64_sig_len);
+      base64uri_encode(b64_sig);
+    } else if (jwt->alg == JWT_ALG_HS512) {
+      tmp_s = snprintf(NULL, 0, "%s.%s", b64_header, b64_payload);
+      tmp = malloc((tmp_s+1)*sizeof(char));
+      snprintf(tmp, (tmp_s+1), "%s.%s", b64_header, b64_payload);
+      str_sig = malloc(gnutls_hmac_get_len(GNUTLS_DIG_SHA512)*sizeof(char));
+      gnutls_hmac_fast(GNUTLS_DIG_SHA512, jwt->key, jwt->key_len, tmp, strlen(tmp), str_sig);
+      b64_sig = malloc(2*gnutls_hmac_get_len(GNUTLS_DIG_SHA512)*sizeof(char));
+      base64_encode(str_sig, gnutls_hmac_get_len(GNUTLS_DIG_SHA512), b64_sig, &b64_sig_len);
+      base64uri_encode(b64_sig);
+    }
+  }
+  
+  free(str_header);
+  free(str_payload);
+  free(b64_header);
+  free(b64_payload);
+  free(str_sig);
+  free(tmp);
+  return b64_sig;
+}
 
-	bmem = BIO_new(BIO_s_mem());
-	if (bmem == NULL) {
-		BIO_free(b64);
-		return ENOMEM;
-	}
+void base64uri_decode(char * b64) {
+  int i, z;
+  size_t len;
+  if (b64 != NULL) {
+    len = strlen(b64);
+    for (i = 0; i < len; i++) {
+      switch (b64[i]) {
+      case '-':
+        b64[i] = '+';
+        break;
+      case '_':
+        b64[i] = '/';
+        break;
+      default:
+        b64[i] = b64[i];
+      }
+    }
+    z = 4 - (i % 4);
+    if (z < 4) {
+      while (z--)
+        b64[i++] = '=';
+    }
+    b64[i] = '\0';
+  }
+  
+}
 
-	BIO_push(b64, bmem);
-	BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL);
+static int jwt_verify_sha_pem(jwt_t *jwt, const gnutls_digest_algorithm_t alg, const char *head, const char *sig_b64) {
+  char * tmp;
+  size_t tmp_len, sig_len;
+  int res = EINVAL;
+  gnutls_pubkey_t pubkey;
+  char * sig_b64_dup = strdup(sig_b64);
+  char * sig_dec;
+  gnutls_datum_t cert_dat = {(void *) jwt->key, jwt->key_len}, data, sig;
+  
+  printf("grut 0\n");
+  base64uri_decode(sig_b64_dup);
+  sig_dec = base64_decode(sig_b64_dup, &sig_len);
+  sig.data = (void*)sig_dec;
+  sig.size = sig_len;
+  printf("grut 1 %s\n", head);
+  free(sig_b64_dup);
+  
+  if (head != NULL) {
+    tmp = strdup(head);
+    tmp_len = strlen(tmp);
+  } else if (jwt != NULL) {
+    char * str_header, * b64_header, * str_payload, * b64_payload;
+    size_t b64_payload_len, b64_header_len;
+    
+    str_header = dump_head(jwt, 0);
+    b64_header = malloc((2*strlen(str_header)+1) * sizeof(char));
+    base64_encode(str_header, strlen(str_header), b64_header, &b64_header_len);
+    base64uri_encode(b64_header);
+    str_payload = json_dumps(jwt->grants, JSON_COMPACT | JSON_SORT_KEYS);
+    b64_payload = malloc((2*strlen(str_payload)+1) * sizeof(char));
+    base64_encode(str_payload, strlen(str_payload), b64_payload, &b64_payload_len);
+    base64uri_encode(b64_payload);
+    tmp_len = snprintf(NULL, 0, "%s.%s", b64_header, b64_payload);
+    tmp = malloc((tmp_len + 1)*sizeof(char));
+    snprintf(tmp, (tmp_len + 1), "%s.%s", b64_header, b64_payload);
+  } else {
+    return EINVAL;
+  }
+  data.data = (void*)tmp;
+  data.size = tmp_len;
+  gnutls_pubkey_init(&pubkey);
+  res = gnutls_pubkey_import(pubkey, &cert_dat, GNUTLS_X509_FMT_PEM);
+  //printf("head is %s\nsig is %s\n", tmp, sig_b64);
+  if (res) {
+    printf("fail gnutls_pubkey_import: %s\n", gnutls_strerror(res));
+  }
+  res = gnutls_pubkey_verify_data2(pubkey, alg, 0, &data, &sig);
+  printf("res is %d: %s\n", res, gnutls_strerror(res));
+  free(tmp);
+  gnutls_pubkey_deinit(pubkey);
+  return res;
+}
 
-	HMAC(alg, jwt->key, jwt->key_len,
-	     (const unsigned char *)head, strlen(head), res, &res_len);
-
-	BIO_write(b64, res, res_len);
-
-	BIO_flush(b64);
-
-	len = BIO_pending(bmem);
-	if (len < 0)
-		goto jwt_verify_hmac_done;
-
-	buf = alloca(len + 1);
-	if (!buf) {
-		ret = ENOMEM;
-		goto jwt_verify_hmac_done;
-	}
-
-	len = BIO_read(bmem, buf, len);
-	buf[len] = '\0';
-
-	base64uri_encode(buf);
-
-	ret = strcmp(buf, sig) ? EINVAL : 0;
-
-jwt_verify_hmac_done:
-	BIO_free_all(b64);
-
-	return ret;
-}*/
+static int jwt_verify_sha_hmac(jwt_t *jwt, const gnutls_digest_algorithm_t alg, const char *head, const char *sig_check) {
+  char * tmp, * str_sig, * b64_sig;
+  size_t  b64_sig_len, tmp_len;
+  int res = EINVAL;
+  
+  if (head != NULL) {
+    tmp = strdup(head);
+  } else if (jwt != NULL) {
+    char * str_header, * b64_header, * str_payload, * b64_payload;
+    size_t b64_payload_len, b64_header_len;
+    
+    str_header = dump_head(jwt, 0);
+    b64_header = malloc((2*strlen(str_header)+1) * sizeof(char));
+    base64_encode(str_header, strlen(str_header), b64_header, &b64_header_len);
+    base64uri_encode(b64_header);
+    str_payload = json_dumps(jwt->grants, JSON_COMPACT | JSON_SORT_KEYS);
+    b64_payload = malloc((2*strlen(str_payload)+1) * sizeof(char));
+    base64_encode(str_payload, strlen(str_payload), b64_payload, &b64_payload_len);
+    base64uri_encode(b64_payload);
+    tmp_len = snprintf(NULL, 0, "%s.%s", b64_header, b64_payload);
+    tmp = malloc((tmp_len + 1)*sizeof(char));
+    snprintf(tmp, (tmp_len + 1), "%s.%s", b64_header, b64_payload);
+  } else {
+    return EINVAL;
+  }
+  str_sig = malloc(gnutls_hmac_get_len(alg)*sizeof(char));
+  gnutls_hmac_fast(alg, jwt->key, jwt->key_len, tmp, strlen(tmp), str_sig);
+  b64_sig = malloc(2*gnutls_hmac_get_len(alg)*sizeof(char));
+  base64_encode(str_sig, gnutls_hmac_get_len(alg)*sizeof(char), b64_sig, &b64_sig_len);
+  base64uri_encode(b64_sig);
+  res = strcmp(b64_sig, sig_check);
+  free(tmp);
+  free(str_sig);
+  free(b64_sig);
+  return res;
+}
 
 #define SIGN_ERROR(__err) ({ ret = __err; goto jwt_sign_sha_pem_done; })
 
-/*static int jwt_sign_sha_pem(jwt_t *jwt, BIO *out, const EVP_MD *alg,
-			    const char *str, int type)
-{
-	EVP_MD_CTX *mdctx = NULL;
-	ECDSA_SIG *ec_sig = NULL;
-	const BIGNUM *ec_sig_r = NULL;
-	const BIGNUM *ec_sig_s = NULL;
-	BIO *bufkey = NULL;
-	EVP_PKEY *pkey = NULL;
-	int pkey_type;
-	unsigned char *sig;
-	int ret = 0;
-	size_t slen;
-
-	bufkey = BIO_new_mem_buf(jwt->key, jwt->key_len);
-	if (bufkey == NULL)
-		SIGN_ERROR(ENOMEM);
-
-	pkey = PEM_read_bio_PrivateKey(bufkey, NULL, NULL, NULL);
-	if (pkey == NULL)
-		SIGN_ERROR(EINVAL);
-
-	pkey_type = EVP_PKEY_id(pkey);
-	if (pkey_type != type)
-		SIGN_ERROR(EINVAL);
-
-	mdctx = EVP_MD_CTX_create();
-	if (mdctx == NULL)
-		SIGN_ERROR(ENOMEM);
-
-	if (EVP_DigestSignInit(mdctx, NULL, alg, NULL, pkey) != 1)
-		SIGN_ERROR(EINVAL);
-
-	if (EVP_DigestSignUpdate(mdctx, str, strlen(str)) != 1)
-		SIGN_ERROR(EINVAL);
-
-	if (EVP_DigestSignFinal(mdctx, NULL, &slen) != 1)
-		SIGN_ERROR(EINVAL);
-
-	sig = alloca(slen);
-	if (sig == NULL)
-		SIGN_ERROR(ENOMEM);
-
-	if (EVP_DigestSignFinal(mdctx, sig, &slen) != 1)
-		SIGN_ERROR(EINVAL);
-
-	if (pkey_type != EVP_PKEY_EC) {
-		BIO_write(out, sig, slen);
-		BIO_flush(out);
-	} else {
-		unsigned int degree, bn_len, r_len, s_len, buf_len;
-		unsigned char *raw_buf;
-		EC_KEY *ec_key;
-
-		ec_key = EVP_PKEY_get1_EC_KEY(pkey);
-		if (ec_key == NULL)
-			SIGN_ERROR(ENOMEM);
-
-		degree = EC_GROUP_get_degree(EC_KEY_get0_group(ec_key));
-
-		EC_KEY_free(ec_key);
-
-		ec_sig = d2i_ECDSA_SIG(NULL, (const unsigned char **)&sig, slen);
-		if (ec_sig == NULL)
-			SIGN_ERROR(ENOMEM);
-
-		ECDSA_SIG_get0(ec_sig, &ec_sig_r, &ec_sig_s);
-		r_len = BN_num_bytes(ec_sig_r);
-		s_len = BN_num_bytes(ec_sig_s);
-		bn_len = (degree + 7) / 8;
-		if ((r_len > bn_len) || (s_len > bn_len))
-			SIGN_ERROR(EINVAL);
-
-		buf_len = 2 * bn_len;
-		raw_buf = alloca(buf_len);
-		if (raw_buf == NULL)
-			SIGN_ERROR(ENOMEM);
-
-		memset(raw_buf, 0, buf_len);
-		BN_bn2bin(ec_sig_r, raw_buf + bn_len - r_len);
-		BN_bn2bin(ec_sig_s, raw_buf + buf_len - s_len);
-
-		BIO_write(out, raw_buf, buf_len);
-		BIO_flush(out);
-	}
-
-jwt_sign_sha_pem_done:
-	if (bufkey)
-		BIO_free(bufkey);
-	if (pkey)
-		EVP_PKEY_free(pkey);
-	if (mdctx)
-		EVP_MD_CTX_destroy(mdctx);
-	if (ec_sig)
-		ECDSA_SIG_free(ec_sig);
-
-	return ret;
-}*/
-
 #define VERIFY_ERROR(__err) ({ ret = __err; goto jwt_verify_sha_pem_done; })
-
-/*static int jwt_verify_sha_pem(jwt_t *jwt, const EVP_MD *alg, int type,
-			      const char *head, const char *sig_b64)
-{
-	unsigned char *sig = NULL;
-	EVP_MD_CTX *mdctx = NULL;
-	ECDSA_SIG *ec_sig = NULL;
-	BIGNUM *ec_sig_r = NULL;
-	BIGNUM *ec_sig_s = NULL;
-	EVP_PKEY *pkey = NULL;
-	int pkey_type;
-	BIO *bufkey = NULL;
-	int ret = 0;
-	int slen;
-
-	sig = jwt_b64_decode(sig_b64, &slen);
-	if (sig == NULL)
-		VERIFY_ERROR(EINVAL);
-
-	bufkey = BIO_new_mem_buf(jwt->key, jwt->key_len);
-	if (bufkey == NULL)
-		VERIFY_ERROR(ENOMEM);
-
-	pkey = PEM_read_bio_PUBKEY(bufkey, NULL, NULL, NULL);
-	if (pkey == NULL)
-		VERIFY_ERROR(EINVAL);
-
-	pkey_type = EVP_PKEY_id(pkey);
-	if (pkey_type != type)
-		VERIFY_ERROR(EINVAL);
-
-	if (pkey_type == EVP_PKEY_EC) {
-		unsigned int degree, bn_len;
-		unsigned char *p;
-		EC_KEY *ec_key;
-
-		ec_sig = ECDSA_SIG_new();
-		if (ec_sig == NULL)
-			VERIFY_ERROR(ENOMEM);
-
-		ec_key = EVP_PKEY_get1_EC_KEY(pkey);
-		if (ec_key == NULL)
-			VERIFY_ERROR(ENOMEM);
-
-		degree = EC_GROUP_get_degree(EC_KEY_get0_group(ec_key));
-
-		EC_KEY_free(ec_key);
-
-		bn_len = (degree + 7) / 8;
-		if ((bn_len * 2) != slen)
-			VERIFY_ERROR(EINVAL);
-
-		ec_sig_r = BN_bin2bn(sig, bn_len, NULL);
-		ec_sig_s = BN_bin2bn(sig + bn_len, bn_len, NULL);
-		if (ec_sig_r  == NULL || ec_sig_s == NULL)
-			VERIFY_ERROR(EINVAL);
-
-		ECDSA_SIG_set0(ec_sig, ec_sig_r, ec_sig_s);
-		free(sig);
-
-		slen = i2d_ECDSA_SIG(ec_sig, NULL);
-		sig = malloc(slen);
-		if (sig == NULL)
-			VERIFY_ERROR(ENOMEM);
-
-		p = sig;
-		slen = i2d_ECDSA_SIG(ec_sig, &p);
-
-		if (slen == 0)
-			VERIFY_ERROR(EINVAL);
-	}
-
-	mdctx = EVP_MD_CTX_create();
-	if (mdctx == NULL)
-		VERIFY_ERROR(ENOMEM);
-
-	if (EVP_DigestVerifyInit(mdctx, NULL, alg, NULL, pkey) != 1)
-		VERIFY_ERROR(EINVAL);
-
-	if (EVP_DigestVerifyUpdate(mdctx, head, strlen(head)) != 1)
-		VERIFY_ERROR(EINVAL);
-
-	if (EVP_DigestVerifyFinal(mdctx, sig, slen) != 1)
-		VERIFY_ERROR(EINVAL);
-
-jwt_verify_sha_pem_done:
-	if (bufkey)
-		BIO_free(bufkey);
-	if (pkey)
-		EVP_PKEY_free(pkey);
-	if (mdctx)
-		EVP_MD_CTX_destroy(mdctx);
-	if (sig)
-		free(sig);
-	if (ec_sig)
-		ECDSA_SIG_free(ec_sig);
-
-	return ret;
-}*/
-
-/*static int jwt_sign(jwt_t *jwt, BIO *out, const char *str)
-{
-	switch (jwt->alg) {
-	case JWT_ALG_HS256:
-		return jwt_sign_sha_hmac(jwt, out, EVP_sha256(), str);
-	case JWT_ALG_HS384:
-		return jwt_sign_sha_hmac(jwt, out, EVP_sha384(), str);
-	case JWT_ALG_HS512:
-		return jwt_sign_sha_hmac(jwt, out, EVP_sha512(), str);
-
-	case JWT_ALG_RS256:
-		return jwt_sign_sha_pem(jwt, out, EVP_sha256(), str,
-					EVP_PKEY_RSA);
-	case JWT_ALG_RS384:
-		return jwt_sign_sha_pem(jwt, out, EVP_sha384(), str,
-					EVP_PKEY_RSA);
-	case JWT_ALG_RS512:
-		return jwt_sign_sha_pem(jwt, out, EVP_sha512(), str,
-					EVP_PKEY_RSA);
-
-	case JWT_ALG_ES256:
-		return jwt_sign_sha_pem(jwt, out, EVP_sha256(), str,
-					EVP_PKEY_EC);
-	case JWT_ALG_ES384:
-		return jwt_sign_sha_pem(jwt, out, EVP_sha384(), str,
-					EVP_PKEY_EC);
-	case JWT_ALG_ES512:
-		return jwt_sign_sha_pem(jwt, out, EVP_sha512(), str,
-					EVP_PKEY_EC);
-
-	default:
-		return EINVAL;
-	}
-}*/
 
 static int jwt_verify(jwt_t *jwt, const char *head, const char *sig)
 {
 	switch (jwt->alg) {
-	/*case JWT_ALG_HS256:
-		return jwt_verify_sha_hmac(jwt, EVP_sha256(), head, sig);
+	case JWT_ALG_HS256:
+		return jwt_verify_sha_hmac(jwt, GNUTLS_DIG_SHA256, head, sig);
 	case JWT_ALG_HS384:
-		return jwt_verify_sha_hmac(jwt, EVP_sha384(), head, sig);
+		return jwt_verify_sha_hmac(jwt, GNUTLS_DIG_SHA384, head, sig);
 	case JWT_ALG_HS512:
-		return jwt_verify_sha_hmac(jwt, EVP_sha512(), head, sig);
+		return jwt_verify_sha_hmac(jwt, GNUTLS_DIG_SHA512, head, sig);
 
 	case JWT_ALG_RS256:
-		return jwt_verify_sha_pem(jwt, EVP_sha256(), EVP_PKEY_RSA,
-					  head, sig);
+		return jwt_verify_sha_pem(jwt, GNUTLS_DIG_SHA256, head, sig);
 	case JWT_ALG_RS384:
-		return jwt_verify_sha_pem(jwt, EVP_sha384(), EVP_PKEY_RSA,
-					  head, sig);
+		return jwt_verify_sha_pem(jwt, GNUTLS_DIG_SHA384, head, sig);
 	case JWT_ALG_RS512:
-		return jwt_verify_sha_pem(jwt, EVP_sha512(), EVP_PKEY_RSA,
-					  head, sig);
+		return jwt_verify_sha_pem(jwt, GNUTLS_DIG_SHA512, head, sig);
 
-	case JWT_ALG_ES256:
+	/*case JWT_ALG_ES256:
 		return jwt_verify_sha_pem(jwt, EVP_sha256(), EVP_PKEY_EC,
 					  head, sig);
 	case JWT_ALG_ES384:
@@ -1100,270 +1024,40 @@ int jwt_del_grant(jwt_t *jwt, const char *grant)
 	__attribute__ ((weak, alias ("jwt_del_grants")));
 #endif
 
-/*static void jwt_write_bio_head(jwt_t *jwt, BIO *bio, int pretty)
-{
-	BIO_puts(bio, "{");
-
-	if (pretty)
-		BIO_puts(bio, "\n");
-
-	if (jwt->alg != JWT_ALG_NONE) {
-		if (pretty)
-			BIO_puts(bio, "    ");
-
-		BIO_printf(bio, "\"typ\":%s\"JWT\",", pretty?" ":"");
-
-		if (pretty)
-			BIO_puts(bio, "\n");
-	}
-
-	if (pretty)
-		BIO_puts(bio, "    ");
-
-	BIO_printf(bio, "\"alg\":%s\"%s\"", pretty?" ":"",
-		   jwt_alg_str(jwt->alg));
-
-	if (pretty)
-		BIO_puts(bio, "\n");
-
-	BIO_puts(bio, "}");
-
-	if (pretty)
-		BIO_puts(bio, "\n");
-
-	BIO_flush(bio);
-}*/
-
-/*static void jwt_write_bio_body(jwt_t *jwt, BIO *bio, int pretty)
-{
-	size_t flags = JSON_SORT_KEYS;
-	char *serial;
-
-	if (pretty) {
-		BIO_puts(bio, "\n");
-		flags |= JSON_INDENT(4);
-	} else {
-		flags |= JSON_COMPACT;
-	}
-
-	serial = json_dumps(jwt->grants, flags);
-
-	BIO_puts(bio, serial);
-
-	free(serial);
-
-	if (pretty)
-		BIO_puts(bio, "\n");
-
-	BIO_flush(bio);
-}
-
-static void jwt_dump_bio(jwt_t *jwt, BIO *out, int pretty)
-{
-	jwt_write_bio_head(jwt, out, pretty);
-	BIO_puts(out, ".");
-	jwt_write_bio_body(jwt, out, pretty);
-}
-
 int jwt_dump_fp(jwt_t *jwt, FILE *fp, int pretty)
 {
-	BIO *bio;
-
-	bio = BIO_new_fp(fp, BIO_NOCLOSE);
-	if (!bio)
-		return ENOMEM;
-
-	jwt_dump_bio(jwt, bio, pretty);
-
-	BIO_free_all(bio);
-
-	return 0;
+  int res;
+  char * dump_str;
+  
+  if (jwt != NULL && fp != NULL) {
+    dump_str = jwt_dump_str(jwt, pretty);
+    res = fputs(dump_str, fp);
+    free(dump_str);
+    if (res == EOF) {
+      return ENOMEM;
+    } else {
+      return 0;
+    }
+  } else {
+    return ENOMEM;
+  }
 }
 
 char *jwt_dump_str(jwt_t *jwt, int pretty)
 {
-	BIO *bmem = BIO_new(BIO_s_mem());
-	char *out;
-	int len;
-
-	if (!bmem) {
-		errno = ENOMEM;
-		return NULL;
-	}
-
-	jwt_dump_bio(jwt, bmem, pretty);
-
-	len = BIO_pending(bmem);
-	out = malloc(len + 1);
-	if (!out) {
-		BIO_free_all(bmem);
-		errno = ENOMEM;
-		return NULL;
-	}
-
-	len = BIO_read(bmem, out, len);
-	out[len] = '\0';
-
-	BIO_free_all(bmem);
-	errno = 0;
-
-	return out;
-}
-*/
-/*static int jwt_encode_bio(jwt_t *jwt, BIO *out)
-{
-	BIO *b64, *bmem;
-	char *buf;
-	int len, len2, ret;
-
-	b64 = BIO_new(BIO_f_base64());
-	bmem = BIO_new(BIO_s_mem());
-	if (!b64 || !bmem)
-		return ENOMEM;
-
-	BIO_push(b64, bmem);
-	BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL);
-
-	jwt_write_bio_head(jwt, b64, 0);
-
-	BIO_puts(bmem, ".");
-
-	jwt_write_bio_body(jwt, b64, 0);
-
-	len = BIO_pending(bmem);
-	buf = alloca(len + 1);
-	if (!buf) {
-		BIO_free_all(b64);
-		return ENOMEM;
-	}
-
-	len = BIO_read(bmem, buf, len);
-	buf[len] = '\0';
-
-	base64uri_encode(buf);
-
-	BIO_puts(out, buf);
-	BIO_puts(out, ".");
-
-	if (jwt->alg == JWT_ALG_NONE)
-		goto encode_bio_success;
-
-	ret = jwt_sign(jwt, b64, buf);
-	if (ret)
-		goto encode_bio_done;
-
-	len2 = BIO_pending(bmem);
-	if (len2 > len) {
-		buf = alloca(len2 + 1);
-		if (!buf) {
-			ret = ENOMEM;
-			goto encode_bio_done;
-		}
-	} else if (len2 < 0) {
-		ret = EINVAL;
-		goto encode_bio_done;
-	}
-
-	len2 = BIO_read(bmem, buf, len2);
-	buf[len2] = '\0';
-
-	base64uri_encode(buf);
-
-	BIO_puts(out, buf);
-
-encode_bio_success:
-	BIO_flush(out);
-
-	ret = 0;
-
-encode_bio_done:
-	BIO_free_all(b64);
-
-	return ret;
-}*/
-
-char * dump_head(jwt_t * jwt, int pretty) {
-  if (jwt != NULL) {
-    json_t * j_header = json_pack("{ssss}", "typ", "jwt", "alg", jwt_alg_str(jwt->alg));
-    char * str_header = json_dumps(j_header, pretty?JSON_INDENT(2):JSON_COMPACT);
-    json_decref(j_header);
-    return str_header;
-  } else {
-    return NULL;
-  }
-}
-
-int jwt_encode_fp(jwt_t *jwt, FILE *fp)
-{
-	/*BIO *bfp = BIO_new_fp(fp, BIO_NOCLOSE);
-	int ret;
-
-	if (!bfp)
-		return ENOMEM;
-
-	ret = jwt_encode_bio(jwt, bfp);
-	BIO_free_all(bfp);
-
-	return ret;*/
-  return 0;
-}
-
-char *jwt_encode_str(jwt_t *jwt) {
-  char * str_header = NULL, * str_payload = NULL, * b64_header = NULL, * b64_payload = NULL, * str_sig = NULL, * b64_sig = NULL, * tmp = NULL, * out = NULL;
-  size_t b64_header_len, b64_payload_len, b64_sig_len, tmp_s, out_len;
+  char * str_header = NULL, * str_payload = NULL, * b64_header = NULL, * b64_payload = NULL, * b64_sig = NULL, * out = NULL;
+  size_t b64_header_len, b64_payload_len, out_len;
   
-  str_header = dump_head(jwt, 0);
+  str_header = dump_head(jwt, pretty);
   b64_header = malloc((2*strlen(str_header)+1) * sizeof(char));
   base64_encode(str_header, strlen(str_header), b64_header, &b64_header_len);
   base64uri_encode(b64_header);
-  str_payload = json_dumps(jwt->grants, JSON_COMPACT);
+  str_payload = json_dumps(jwt->grants, (pretty?JSON_INDENT(2):JSON_COMPACT) | JSON_SORT_KEYS);
   b64_payload = malloc((2*strlen(str_payload)+1) * sizeof(char));
   base64_encode(str_payload, strlen(str_payload), b64_payload, &b64_payload_len);
   base64uri_encode(b64_payload);
   
-  if (jwt->alg == JWT_ALG_NONE) {
-    b64_sig = strdup("");
-    b64_sig_len = 0;
-  } else if (jwt->alg == JWT_ALG_ES256) {
-    // TODO
-  } else if (jwt->alg == JWT_ALG_ES384) {
-    // TODO
-  } else if (jwt->alg == JWT_ALG_ES512) {
-    // TODO
-  } else if (jwt->alg == JWT_ALG_RS256) {
-    // TODO
-  } else if (jwt->alg == JWT_ALG_RS384) {
-    // TODO
-  } else if (jwt->alg == JWT_ALG_RS512) {
-    // TODO
-  } else if (jwt->alg == JWT_ALG_HS256) {
-    tmp_s = snprintf(NULL, 0, "%s.%s", b64_header, b64_payload);
-    tmp = malloc((tmp_s+1)*sizeof(char));
-    snprintf(tmp, (tmp_s+1), "%s.%s", b64_header, b64_payload);
-    str_sig = malloc(gnutls_hmac_get_len(GNUTLS_DIG_SHA256)*sizeof(char));
-    gnutls_hmac_fast(GNUTLS_DIG_SHA256, jwt->key, jwt->key_len, tmp, strlen(tmp), str_sig);
-    b64_sig = malloc(2*gnutls_hmac_get_len(GNUTLS_DIG_SHA256)*sizeof(char));
-    base64_encode(str_sig, gnutls_hmac_get_len(GNUTLS_DIG_SHA256), b64_sig, &b64_sig_len);
-    base64uri_encode(b64_sig);
-  } else if (jwt->alg == JWT_ALG_HS384) {
-    tmp_s = snprintf(NULL, 0, "%s.%s", b64_header, b64_payload);
-    tmp = malloc((tmp_s+1)*sizeof(char));
-    snprintf(tmp, (tmp_s+1), "%s.%s", b64_header, b64_payload);
-    str_sig = malloc(gnutls_hmac_get_len(GNUTLS_DIG_SHA384)*sizeof(char));
-    gnutls_hmac_fast(GNUTLS_DIG_SHA384, jwt->key, jwt->key_len, tmp, strlen(tmp), str_sig);
-    b64_sig = malloc(2*gnutls_hmac_get_len(GNUTLS_DIG_SHA384)*sizeof(char));
-    base64_encode(str_sig, gnutls_hmac_get_len(GNUTLS_DIG_SHA384), b64_sig, &b64_sig_len);
-    base64uri_encode(b64_sig);
-  } else if (jwt->alg == JWT_ALG_HS512) {
-    tmp_s = snprintf(NULL, 0, "%s.%s", b64_header, b64_payload);
-    tmp = malloc((tmp_s+1)*sizeof(char));
-    snprintf(tmp, (tmp_s+1), "%s.%s", b64_header, b64_payload);
-    str_sig = malloc(gnutls_hmac_get_len(GNUTLS_DIG_SHA512)*sizeof(char));
-    gnutls_hmac_fast(GNUTLS_DIG_SHA512, jwt->key, jwt->key_len, tmp, strlen(tmp), str_sig);
-    b64_sig = malloc(2*gnutls_hmac_get_len(GNUTLS_DIG_SHA512)*sizeof(char));
-    base64_encode(str_sig, gnutls_hmac_get_len(GNUTLS_DIG_SHA512), b64_sig, &b64_sig_len);
-    base64uri_encode(b64_sig);
-  }
+  b64_sig = jwt_generate_signature(jwt, pretty, b64_header, b64_payload);
   
   out_len = snprintf(NULL, 0, "%s.%s.%s", b64_header, b64_payload, b64_sig);
   out = malloc((out_len + 1)*sizeof(char));
@@ -1372,8 +1066,15 @@ char *jwt_encode_str(jwt_t *jwt) {
   free(str_payload);
   free(b64_header);
   free(b64_payload);
-  free(str_sig);
   free(b64_sig);
-  free(tmp);
   return out;
+}
+
+int jwt_encode_fp(jwt_t *jwt, FILE *fp)
+{
+  return jwt_dump_fp(jwt, fp, 0);
+}
+
+char *jwt_encode_str(jwt_t *jwt) {
+  return jwt_dump_str(jwt, 0);
 }
