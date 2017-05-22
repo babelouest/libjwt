@@ -5,7 +5,7 @@ libjwt_la_SOURCES = jwt.c
 libjwt_la_LDFLAGS = -version-info 3:0:3 $(OPENSSL_LDFLAGS) $(JANSSON_LDFLAGS)
 libjwt_la_CPPFLAGS = -I$(top_srcdir)/include $(OPENSSL_INCLUDES) $(CODE_COVERAGE_CPPFLAGS) -Wall
 libjwt_la_CFLAGS = $(JANSSON_CFLAGS) $(OPENSSL_CFLAGS) $(CODE_COVERAGE_CFLAGS)
-libjwt_la_LIBADD = $(JANSSON_LIBS) $(OPENSSL_LIBS) $(CODE_COVERAGE_LDFLAGS)
+libjwt_la_LIBADD = $(JANSSON_LIBS) $(OPENSSL_LIBS) $(CODE_COVERAGE_LDFLAGS) -lgnutls
 
 pkgconfiglibdir = $(libdir)/pkgconfig
 pkgconfiglib_DATA = libjwt.pc

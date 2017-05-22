@@ -8,7 +8,14 @@ AC_CONFIG_HEADERS([libjwt/config.h])
 
 AC_SUBST([AM_CFLAGS], [-Wall])
 
-PKG_CHECK_MODULES([OPENSSL], [openssl >= 0.9.8])
+AC_ARG_WITH([gnutls], AS_HELP_STRING([--with-gnutls], [Build with the GNUtls library instead of OpenSSL]))
+
+if test "x$with_gnutls" = "xyes"; then
+   PKG_CHECK_MODULES([GNUTLS], [gnutls >= 2.12])
+else
+   PKG_CHECK_MODULES([OPENSSL], [openssl >= 0.9.8])
+fi
+
 PKG_CHECK_MODULES([JANSSON], [jansson >= 2.0])
 PKG_CHECK_MODULES([CHECK], [check >= 0.9.4], [true], [true])
 
