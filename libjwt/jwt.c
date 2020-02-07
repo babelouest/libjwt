@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <stdio.h>
 
 #include <jwt.h>
 
@@ -23,15 +24,15 @@ void *jwt_malloc(size_t size)
 {
 	if (pfn_malloc)
 		return pfn_malloc(size);
-	
+
 	return malloc(size);
 }
 
-void *jwt_realloc(void* ptr, size_t size)
+static void *jwt_realloc(void* ptr, size_t size)
 {
 	if (pfn_realloc)
 		return pfn_realloc(ptr, size);
-	
+
 	return realloc(ptr, size);
 }
 
@@ -43,7 +44,7 @@ void jwt_freemem(void *ptr)
 		free(ptr);
 }
 
-char *jwt_strdup(const char *str)
+static char *jwt_strdup(const char *str)
 {
 	size_t len;
 	char *result;
@@ -58,7 +59,7 @@ char *jwt_strdup(const char *str)
 	return result;
 }
 
-void *jwt_calloc(size_t nmemb, size_t size)
+static void *jwt_calloc(size_t nmemb, size_t size)
 {
 	size_t total_size;
 	void* ptr;
@@ -107,25 +108,25 @@ jwt_alg_t jwt_str_alg(const char *alg)
 	if (alg == NULL)
 		return JWT_ALG_INVAL;
 
-	if (!strcasecmp(alg, "none"))
+	if (!strcmp(alg, "none"))
 		return JWT_ALG_NONE;
-	else if (!strcasecmp(alg, "HS256"))
+	else if (!strcmp(alg, "HS256"))
 		return JWT_ALG_HS256;
-	else if (!strcasecmp(alg, "HS384"))
+	else if (!strcmp(alg, "HS384"))
 		return JWT_ALG_HS384;
-	else if (!strcasecmp(alg, "HS512"))
+	else if (!strcmp(alg, "HS512"))
 		return JWT_ALG_HS512;
-	else if (!strcasecmp(alg, "RS256"))
+	else if (!strcmp(alg, "RS256"))
 		return JWT_ALG_RS256;
-	else if (!strcasecmp(alg, "RS384"))
+	else if (!strcmp(alg, "RS384"))
 		return JWT_ALG_RS384;
-	else if (!strcasecmp(alg, "RS512"))
+	else if (!strcmp(alg, "RS512"))
 		return JWT_ALG_RS512;
-	else if (!strcasecmp(alg, "ES256"))
+	else if (!strcmp(alg, "ES256"))
 		return JWT_ALG_ES256;
-	else if (!strcasecmp(alg, "ES384"))
+	else if (!strcmp(alg, "ES384"))
 		return JWT_ALG_ES384;
-	else if (!strcasecmp(alg, "ES512"))
+	else if (!strcmp(alg, "ES512"))
 		return JWT_ALG_ES512;
 
 	return JWT_ALG_INVAL;
@@ -495,11 +496,6 @@ static int jwt_verify_head(jwt_t *jwt, char *head)
 	}
 
 	if (jwt->alg != JWT_ALG_NONE) {
-		/* If alg is not NONE, there may be a typ. */
-		val = get_js_string(jwt->headers, "typ");
-		if (val && strcasecmp(val, "JWT"))
-			ret = EINVAL;
-
 		if (jwt->key) {
 			if (jwt->key_len <= 0)
 				ret = EINVAL;
@@ -932,11 +928,16 @@ static int jwt_write_head(jwt_t *jwt, char **buf, int pretty)
 	int ret = 0;
 
 	if (jwt->alg != JWT_ALG_NONE) {
-		if ((ret = jwt_del_headers(jwt, "typ")))
-			return ret;
 
-		if ((ret = jwt_add_header(jwt, "typ", "JWT")))
-			return ret;
+		/* Only add default 'typ' header if it has not been defined,
+		 * allowing for any value of it. This allows for signaling
+		 * of application specific extentions to JWT, such as PASSporT,
+		 * RFC 8225. */
+		if ((ret = jwt_add_header(jwt, "typ", "JWT"))) {
+			if (ret != EEXIST) {
+				return ret;
+			}
+		}
 	}
 
 	if ((ret = jwt_del_headers(jwt, "alg")))
@@ -1157,4 +1158,266 @@ void jwt_get_alloc(jwt_malloc_t *pmalloc, jwt_realloc_t* prealloc, jwt_free_t *p
 
 	if (pfree)
 		*pfree = pfn_free;
+}
+
+int jwt_valid_new(jwt_valid_t **jwt_valid, jwt_alg_t alg)
+{
+	if (!jwt_valid)
+		return EINVAL;
+
+	*jwt_valid = jwt_malloc(sizeof(jwt_valid_t));
+	if (!*jwt_valid)
+		return ENOMEM;
+
+	memset(*jwt_valid, 0, sizeof(jwt_valid_t));
+	(*jwt_valid)->alg = alg;
+
+	(*jwt_valid)->status = JWT_VALIDATION_ERROR;
+
+	(*jwt_valid)->req_grants = json_object();
+	if (!(*jwt_valid)->req_grants) {
+		jwt_freemem(*jwt_valid);
+		*jwt_valid = NULL;
+		return ENOMEM;
+	}
+
+	return 0;
+}
+
+void jwt_valid_free(jwt_valid_t *jwt_valid)
+{
+	if (!jwt_valid)
+		return;
+
+	json_decref(jwt_valid->req_grants);
+
+	jwt_freemem(jwt_valid);
+}
+
+unsigned int jwt_valid_get_status(jwt_valid_t *jwt_valid)
+{
+	if (!jwt_valid)
+		return JWT_VALIDATION_ERROR;
+
+	return jwt_valid->status;
+}
+
+int jwt_valid_add_grant(jwt_valid_t *jwt_valid, const char *grant, const char *val)
+{
+	if (!jwt_valid || !grant || !strlen(grant) || !val)
+		return EINVAL;
+
+	if (get_js_string(jwt_valid->req_grants, grant) != NULL)
+		return EEXIST;
+
+	if (json_object_set_new(jwt_valid->req_grants, grant, json_string(val)))
+		return EINVAL;
+
+	return 0;
+}
+
+int jwt_valid_add_grant_int(jwt_valid_t *jwt_valid, const char *grant, long val)
+{
+	if (!jwt_valid || !grant || !strlen(grant))
+		return EINVAL;
+
+	if (get_js_int(jwt_valid->req_grants, grant) != -1)
+		return EEXIST;
+
+	if (json_object_set_new(jwt_valid->req_grants, grant, json_integer((json_int_t)val)))
+		return EINVAL;
+
+	return 0;
+}
+
+int jwt_valid_add_grant_bool(jwt_valid_t *jwt_valid, const char *grant, int val)
+{
+	if (!jwt_valid || !grant || !strlen(grant))
+		return EINVAL;
+
+	if (get_js_int(jwt_valid->req_grants, grant) != -1)
+		return EEXIST;
+
+	if (json_object_set_new(jwt_valid->req_grants, grant, json_boolean(val)))
+		return EINVAL;
+
+	return 0;
+}
+
+int jwt_valid_add_grants_json(jwt_valid_t *jwt_valid, const char *json)
+{
+	json_t *js_val;
+	int ret = -1;
+
+	if (!jwt_valid)
+		return EINVAL;
+
+	js_val = json_loads(json, JSON_REJECT_DUPLICATES, NULL);
+
+	if (json_is_object(js_val))
+		ret = json_object_update(jwt_valid->req_grants, js_val);
+
+	json_decref(js_val);
+
+	return ret ? EINVAL : 0;
+}
+
+char *jwt_valid_get_grants_json(jwt_valid_t *jwt_valid, const char *grant)
+{
+	json_t *js_val = NULL;
+
+	errno = EINVAL;
+
+	if (!jwt_valid)
+		return NULL;
+
+	if (grant && strlen(grant))
+		js_val = json_object_get(jwt_valid->req_grants, grant);
+	else
+		js_val = jwt_valid->req_grants;
+
+	if (js_val == NULL)
+		return NULL;
+
+	errno = 0;
+
+	return json_dumps(js_val, JSON_SORT_KEYS | JSON_COMPACT | JSON_ENCODE_ANY);
+}
+
+const char *jwt_valid_get_grant(jwt_valid_t *jwt_valid, const char *grant)
+{
+	if (!jwt_valid || !grant || !strlen(grant)) {
+		errno = EINVAL;
+		return NULL;
+	}
+
+	errno = 0;
+
+	return get_js_string(jwt_valid->req_grants, grant);
+}
+
+long jwt_valid_get_grant_int(jwt_valid_t *jwt_valid, const char *grant)
+{
+	if (!jwt_valid || !grant || !strlen(grant)) {
+		errno = EINVAL;
+		return 0;
+	}
+
+	errno = 0;
+
+	return get_js_int(jwt_valid->req_grants, grant);
+}
+
+int jwt_valid_get_grant_bool(jwt_valid_t *jwt_valid, const char *grant)
+{
+	if (!jwt_valid || !grant || !strlen(grant)) {
+		errno = EINVAL;
+		return 0;
+	}
+
+	errno = 0;
+
+	return get_js_bool(jwt_valid->req_grants, grant);
+}
+
+int jwt_valid_set_now(jwt_valid_t *jwt_valid, const time_t now)
+{
+	if (!jwt_valid)
+		return EINVAL;
+
+	jwt_valid->now = now;
+
+	return 0;
+}
+
+int jwt_valid_set_headers(jwt_valid_t *jwt_valid, int hdr)
+{
+	if (!jwt_valid)
+		return EINVAL;
+
+	jwt_valid->hdr = hdr;
+
+	return 0;
+}
+
+int jwt_valid_del_grants(jwt_valid_t *jwt_valid, const char *grant)
+{
+	if (!jwt_valid)
+		return EINVAL;
+
+	if (grant == NULL || !strlen(grant))
+		json_object_clear(jwt_valid->req_grants);
+	else
+		json_object_del(jwt_valid->req_grants, grant);
+
+	return 0;
+}
+
+#define _SET_AND_RET(__v, __e) do {	\
+	__v->status |= __e;		\
+	return __v->status;		\
+} while(0)
+
+unsigned int jwt_validate(jwt_t *jwt, jwt_valid_t *jwt_valid)
+{
+	const char *jwt_hdr_str, *jwt_body_str, *req_grant;
+	json_t *js_val_1, *js_val_2;
+	time_t t;
+
+	if (!jwt_valid)
+		return JWT_VALIDATION_ERROR;
+
+	if (!jwt) {
+		jwt_valid->status = JWT_VALIDATION_ERROR;
+		return jwt_valid->status;
+	}
+
+	jwt_valid->status = JWT_VALIDATION_SUCCESS;
+
+	/* Validate algorithm */
+	if (jwt_valid->alg != jwt_get_alg(jwt))
+		jwt_valid->status |= JWT_VALIDATION_ALG_MISMATCH;
+
+	/* Validate expires */
+	t = get_js_int(jwt->grants, "exp");
+	if (jwt_valid->now && t != -1 && jwt_valid->now >= t)
+		jwt_valid->status |= JWT_VALIDATION_EXPIRED;
+
+	/* Validate not-before */
+	t = get_js_int(jwt->grants, "nbf");
+	if (jwt_valid->now && t != -1 && jwt_valid->now < t)
+		jwt_valid->status |= JWT_VALIDATION_TOO_NEW;
+
+	/* Validate replicated issuer */
+	jwt_hdr_str = get_js_string(jwt->headers, "iss");
+	jwt_body_str = get_js_string(jwt->grants, "iss");
+	if (jwt_hdr_str && jwt_body_str && strcmp(jwt_hdr_str, jwt_body_str))
+		jwt_valid->status |= JWT_VALIDATION_ISS_MISMATCH;
+
+	/* Validate replicated subject */
+	jwt_hdr_str = get_js_string(jwt->headers, "sub");
+	jwt_body_str = get_js_string(jwt->grants, "sub");
+	if (jwt_hdr_str && jwt_body_str && strcmp(jwt_hdr_str, jwt_body_str))
+		jwt_valid->status |= JWT_VALIDATION_SUB_MISMATCH;
+
+	/* Validate replicated audience (might be array or string) */
+	js_val_1 = json_object_get(jwt->headers, "aud");
+	js_val_2 = json_object_get(jwt->grants, "aud");
+	if (js_val_1 && js_val_2 && !json_equal(js_val_1, js_val_2))
+		jwt_valid->status |= JWT_VALIDATION_AUD_MISMATCH;
+
+	/* Validate required grants */
+	json_object_foreach(jwt_valid->req_grants, req_grant, js_val_1) {
+		json_t *act_js_val = json_object_get(jwt->grants, req_grant);
+
+		if (act_js_val && json_equal(js_val_1, act_js_val))
+			continue;
+
+		if (act_js_val)
+			jwt_valid->status |= JWT_VALIDATION_GRANT_MISMATCH;
+		else
+			jwt_valid->status |= JWT_VALIDATION_GRANT_MISSING;
+	}
+
+	return jwt_valid->status;
 }

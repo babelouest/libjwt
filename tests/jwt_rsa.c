@@ -96,7 +96,7 @@ static void read_key(const char *key_file)
 	fp = fopen(key_path, "r");
 	ck_assert_ptr_ne(fp, NULL);
 
-	free(key_path);
+	jwt_free_str(key_path);
 
 	key_len = fread(key, 1, sizeof(key), fp);
 	ck_assert_int_ne(key_len, 0);
@@ -139,7 +139,7 @@ static void __test_alg_key(const char *key_file, const char *jwt_str,
 
 	ck_assert_str_eq(out, jwt_str);
 
-	free(out);
+	jwt_free_str(out);
 	jwt_free(jwt);
 }
 
@@ -155,8 +155,12 @@ static void __verify_alg_key(const char *key_file, const char *jwt_str,
 	ck_assert_int_eq(ret, 0);
 	ck_assert(jwt != NULL);
 
-	ck_assert(jwt_get_alg(jwt) == alg);
+	jwt_valid_t *jwt_valid = NULL;
+	jwt_valid_new(&jwt_valid, alg);
 
+	ck_assert_int_eq(JWT_VALIDATION_SUCCESS, jwt_validate(jwt, jwt_valid));
+
+	jwt_valid_free(jwt_valid);
 	jwt_free(jwt);
 }
 
@@ -169,6 +173,34 @@ END_TEST
 START_TEST(test_jwt_verify_rs256)
 {
 	__verify_alg_key("rsa_key_2048-pub.pem", jwt_rs256_2048, JWT_ALG_RS256);
+}
+END_TEST
+
+START_TEST(test_jwt_validate_rs256)
+{
+	jwt_t *jwt = NULL;
+	jwt_valid_t *jwt_valid = NULL;
+	int ret = 0;
+
+	read_key("rsa_key_2048-pub.pem");
+
+	ret = jwt_decode(&jwt, jwt_rs256_2048, key, key_len);
+	ck_assert_int_eq(ret, 0);
+	ck_assert(jwt != NULL);
+
+	jwt_valid_new(&jwt_valid, JWT_ALG_RS256);
+	ck_assert(jwt_valid != NULL);
+
+	ret = jwt_valid_add_grant(jwt_valid, "iss", "files.cyphre.com");
+	ck_assert_int_eq(ret, 0);
+
+	ret = jwt_valid_add_grant_int(jwt_valid, "iat", TS_CONST);
+	ck_assert_int_eq(ret, 0);
+
+	ck_assert_int_eq(JWT_VALIDATION_SUCCESS, jwt_validate(jwt, jwt_valid));
+
+	jwt_valid_free(jwt_valid);
+	jwt_free(jwt);
 }
 END_TEST
 
@@ -345,6 +377,7 @@ static Suite *libjwt_suite(void)
 
 	tcase_add_test(tc_core, test_jwt_encode_rs256);
 	tcase_add_test(tc_core, test_jwt_verify_rs256);
+	tcase_add_test(tc_core, test_jwt_validate_rs256);
 	tcase_add_test(tc_core, test_jwt_encode_rs384);
 	tcase_add_test(tc_core, test_jwt_verify_rs384);
 	tcase_add_test(tc_core, test_jwt_encode_rs512);

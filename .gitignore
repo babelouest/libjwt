@@ -32,6 +32,9 @@ Makefile
 *.gcno
 /.vscode/*
 
+# Generic ignores for cmake project
+/out/*
+
 # Explicit stuff
 !/m4/ax_check_openssl.m4
 !/m4/doxygen.m4
@@ -40,3 +43,7 @@ Makefile
 !/m4/jwt_weak_alias.m4
 /doxygen-doc/*
 /libjwt/libjwt.pc
+/dist/libjwt.spec
+
+# Cmake
+/build

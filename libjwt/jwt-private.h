@@ -9,6 +9,7 @@
 #define JWT_PRIVATE_H
 
 #include <jansson.h>
+#include <time.h>
 
 struct jwt {
 	jwt_alg_t alg;
@@ -18,12 +19,17 @@ struct jwt {
 	json_t *headers;
 };
 
+struct jwt_valid {
+	jwt_alg_t alg;
+	time_t now;
+	int hdr;
+	json_t *req_grants;
+	unsigned int status;
+};
+
 /* Memory allocators. */
 void *jwt_malloc(size_t size);
 void jwt_freemem(void *ptr);
-char *jwt_strdup(const char *str);
-void *jwt_calloc(size_t nmemb, size_t size);
-void *jwt_realloc(void *ptr, size_t size);
 
 /* Helper routines. */
 void jwt_base64uri_encode(char *str);
